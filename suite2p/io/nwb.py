@@ -1,6 +1,7 @@
 import datetime
 import os
-from natsort import natsorted 
+from natsort import natsorted
+import uuid
 
 import numpy as np
 import time
@@ -12,15 +13,17 @@ from . import utils
 from .. import run_s2p
 
 try:
-    from pynwb import NWBFile
+    from pynwb import NWBFile, Subject
     from pynwb.base import Images
     from pynwb.image import GrayscaleImage
     from pynwb.device import Device
-    from pynwb.ophys import OpticalChannel
-    from pynwb.ophys import TwoPhotonSeries
-    from pynwb.ophys import ImageSegmentation
-    from pynwb.ophys import RoiResponseSeries
-    from pynwb.ophys import Fluorescence
+    from pynwb.ophys import (
+        OpticalChannel,
+        TwoPhotonSeries,
+        ImageSegmentation,
+        RoiResponseSeries,
+        Fluorescence,
+    )
     from pynwb import NWBHDF5IO
     NWB = True
 except ModuleNotFoundError:
@@ -77,7 +80,7 @@ def nwb_to_binary(ops):
     if ops.get('nwb_driver') and isinstance(nwb_driver, str):
         nwb_driver = ops['nwb_driver']
 
-        
+
     with NWBHDF5IO(ops['nwb_file'], 'r', driver=nwb_driver) as fio:
         nwbfile = fio.read()
 
@@ -262,38 +265,109 @@ def read_nwb(fpath):
     return stat, ops, F, Fneu, spks, iscell, probcell, redcell, probredcell
 
 
-def create_nwb_file(ops, multiplane):
-    ### INITIALIZE NWB FILE
+def create_nwb_file(ops, multiplane: bool, metadata: dict = None):
+    """
+    Initialize NWB File
+
+    Parameters
+    ----------
+    ops
+    multiplane: bool
+    metadata: dict, optional
+        takes the following form - any parts can be omitted.
+        metadata = dict(
+            NWBFile=dict(
+                session_description='suite2p_proc',
+                session_start_time='2021-10-09T00:00',
+                experimenter=['First Last'],
+                lab='My Lab',
+                institution='My Institution',
+            ),
+            Subject=dict(
+                subject_id='001',  # use whatever lab standard, just make it a string
+                age='P90D',  # e.g. for 90 days
+                species='Mus musculus',  # latin binomial
+                sex="M",
+            ),
+            Device=dict(
+                name='Microscope',
+                description='My two-photon microscope',
+                manufacturer='The best microscope manufacturer',
+            ),
+            OpticalChannel=dict(
+                name='OpticalChannel',
+                description='an optical channel',
+                emission_lambda=np.nan,  # in nm
+            ),
+            ImagingPlane=dict(
+                name='ImagingPlane',
+                description='standard',
+                excitation_lambda=np.nan,  # in nm
+                indicator='unknown',
+                location='unknown',
+            )
+        )
+
+    Returns
+    -------
+    (NWBFile, TwoPhotonSeries)
+
+    """
+    if metadata is None:
+        metadata = dict()
+
     nwbfile = NWBFile(
-        session_description='suite2p_proc',
-        identifier=str(ops['data_path'][0]),
-        session_start_time=(ops['date_proc'] if 'date_proc' in ops 
-                            else datetime.datetime.now())
+        **dict(
+            dict(
+                session_description='suite2p_proc',
+                session_id=str(ops['data_path'][0]),
+                identifier=str(uuid.uuid4()),
+                session_start_time=(
+                    ops['date_proc'] if 'date_proc' in ops else datetime.datetime.now()
+                ),
+            ),
+            **metadata.get("NWBFile", {})
+        )
+
     )
-    print(nwbfile)
+
+    if "Subject" in metadata:
+        nwbfile.subject = Subject(**metadata["Subject"])
 
     device = nwbfile.create_device(
-        name='Microscope', 
-        description='My two-photon microscope',
-        manufacturer='The best microscope manufacturer'
+        **dict(
+            dict(
+                name='Microscope',
+                description='My two-photon microscope',
+            ),
+            **metadata.get("Device", {})
+        )
     )
     optical_channel = OpticalChannel(
-        name='OpticalChannel', 
-        description='an optical channel', 
-        emission_lambda=500.
+        **dict(
+            dict(
+                name='OpticalChannel',
+                description='an optical channel',
+                emission_lambda=np.nan,
+            ),
+            **metadata.get("OpticalChannel", {})
+        )
     )
 
     imaging_plane = nwbfile.create_imaging_plane(
-        name='ImagingPlane',
-        optical_channel=optical_channel,
-        imaging_rate=ops['fs'],
-        description='standard',
-        device=device,
-        excitation_lambda=600.,
-        indicator='GCaMP',
-        location='V1',
-        grid_spacing=([2.0,2.0,30.0] if multiplane else [2.0,2.0]),
-        grid_spacing_unit='microns'
+        **dict(
+            dict(
+                name='ImagingPlane',
+                optical_channel=optical_channel,
+                imaging_rate=ops['fs'],
+                description='standard',
+                device=device,
+                excitation_lambda=np.nan,
+                indicator='unknown',
+                location='unknown',
+            ),
+            **metadata.get("ImagingPlane", {})
+        )
     )
 
     # link to external data
